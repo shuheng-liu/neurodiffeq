@@ -1,3 +1,4 @@
+wheel
 packaging
 matplotlib
 numpy
@@ -7,3 +8,5 @@ pytest
 pandas
 seaborn
 dill
+tensorboard
+requests

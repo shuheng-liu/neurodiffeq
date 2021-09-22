@@ -1,11 +1,13 @@
 import sys
-import torch
+import pytest
+from pytest import raises, warns, deprecated_call
 import numpy as np
-from pytest import raises
+import torch
 # atomic-ish generator classes
 from neurodiffeq.generators import Generator1D
 from neurodiffeq.generators import Generator2D
 from neurodiffeq.generators import Generator3D
+from neurodiffeq.generators import GeneratorND
 from neurodiffeq.generators import GeneratorSpherical
 # complex generator classes
 from neurodiffeq.generators import ConcatGenerator
@@ -16,13 +18,34 @@ from neurodiffeq.generators import EnsembleGenerator
 from neurodiffeq.generators import FilterGenerator
 from neurodiffeq.generators import ResampleGenerator
 from neurodiffeq.generators import BatchGenerator
+from neurodiffeq.generators import SamplerGenerator
+from neurodiffeq.generators import MeshGenerator
 
-MAGIC = 42
-torch.manual_seed(MAGIC)
-np.random.seed(MAGIC)
+
+@pytest.fixture(autouse=True)
+def magic():
+    MAGIC = 42
+    torch.manual_seed(MAGIC)
+    np.random.seed(MAGIC)
+    return MAGIC
 
 
 def _check_shape_and_grad(generator, target_size, *xs):
+    if target_size is not None:
+        if target_size != generator.size:
+            print(f"size mismatch {target_size} != {generator.size}", file=sys.stderr)
+            return False
+    for x in xs:
+        if x.shape != (generator.size,):
+            print(f"Bad shape: {x.shape} != {generator.size}", file=sys.stderr)
+            return False
+        if not x.requires_grad:
+            print(f"Doesn't require grad: {x}", file=sys.stderr)
+            return False
+    return True
+
+
+def _check_shape_and_grad_for_N(generator, target_size, xs):
     if target_size is not None:
         if target_size != generator.size:
             print(f"size mismatch {target_size} != {generator.size}", file=sys.stderr)
@@ -85,7 +108,9 @@ def test_generator1d():
 
     with raises(ValueError):
         generator = Generator1D(size=size, t_min=0.0, t_max=2.0, method='magic')
-    print('ExampleGenerator test passed.')
+
+    str(generator)
+    repr(generator)
 
 
 def test_generator2d():
@@ -109,6 +134,9 @@ def test_generator2d():
     assert _check_shape_and_grad(generator, size, x, y)
     assert _check_boundary((x, y), (x_min, y_min), (x_max, y_max))
 
+    str(generator)
+    repr(generator)
+
 
 def test_generator3d():
     grid = (5, 6, 7)
@@ -128,6 +156,84 @@ def test_generator3d():
     assert _check_shape_and_grad(generator, size, x, y, z)
     assert _check_boundary((x, y, z), (x_min, y_min, z_min), (x_max, y_max, z_max))
 
+    str(generator)
+    repr(generator)
+
+
+def test_generatorNd():
+    grid = (5,)
+    r_min = (0.1,)
+    r_max = (1.0,)
+    r_noise_std = (0.05,)
+    max_dim = 4
+
+    while len(grid) < (max_dim + 1):
+        size = np.prod(grid)
+
+        methods = ['uniform' for m in range(len(grid))]
+
+        generator = GeneratorND(grid=grid, r_min=r_min, r_max=r_max,
+                                methods=methods, noisy=False)
+        assert _check_shape_and_grad_for_N(generator, size, generator.getter())
+        assert _check_boundary(generator.getter(), r_min, r_max)
+
+        methods = ['equally-spaced' for m in range(len(grid))]
+
+        generator = GeneratorND(grid=grid, r_min=r_min, r_max=r_max,
+                                methods=methods, noisy=True)
+        assert _check_shape_and_grad_for_N(generator, size, generator.getter())
+
+        generator = GeneratorND(grid=grid, r_min=r_min, r_max=r_max,
+                                methods=methods, noisy=True, r_noise_std=r_noise_std)
+        assert _check_shape_and_grad_for_N(generator, size, generator.getter())
+
+        generator = GeneratorND(grid=grid, r_min=r_min, r_max=r_max,
+                                methods=methods, noisy=False)
+        assert _check_shape_and_grad_for_N(generator, size, generator.getter())
+        assert _check_boundary(generator.getter(), r_min, r_max)
+
+        methods = ['log-spaced' for m in range(len(grid))]
+
+        generator = GeneratorND(grid=grid, r_min=r_min, r_max=r_max,
+                                methods=methods, noisy=True)
+        assert _check_shape_and_grad_for_N(generator, size, generator.getter())
+
+        generator = GeneratorND(grid=grid, r_min=r_min, r_max=r_max,
+                                methods=methods, noisy=False)
+        assert _check_shape_and_grad_for_N(generator, size, generator.getter())
+        assert _check_boundary(generator.getter(), r_min, r_max)
+
+        methods = ['exp-spaced' for m in range(len(grid))]
+
+        generator = GeneratorND(grid=grid, r_min=r_min, r_max=r_max,
+                                methods=methods, noisy=True)
+        assert _check_shape_and_grad_for_N(generator, size, generator.getter())
+
+        generator = GeneratorND(grid=grid, r_min=r_min, r_max=r_max,
+                                methods=methods, noisy=False)
+        assert _check_shape_and_grad_for_N(generator, size, generator.getter())
+        # No check_boundary because doing 10 ** x and then log10() does not always return exactly x
+
+        if len(grid) == 3:
+            methods = ['uniform', 'equally-spaced', 'log-spaced']
+
+            generator = GeneratorND(grid=grid, r_min=r_min, r_max=r_max,
+                                    methods=methods, noisy=True)
+            assert _check_shape_and_grad_for_N(generator, size, generator.getter())
+
+            generator = GeneratorND(grid=grid, r_min=r_min, r_max=r_max,
+                                    methods=methods, noisy=False)
+            assert _check_shape_and_grad_for_N(generator, size, generator.getter())
+            assert _check_boundary(generator.getter(), r_min, r_max)
+
+        grid += (grid[-1] + 1,)
+        r_min += (r_min[-1] + 1,)
+        r_max += (r_max[-1] + 1,)
+        r_noise_std += (r_noise_std[-1] + 0.01,)
+
+    str(generator)
+    repr(generator)
+
 
 def test_generator_spherical():
     size = 64
@@ -142,6 +248,18 @@ def test_generator_spherical():
     r, theta, phi = generator.get_examples()
     assert _check_shape_and_grad(generator, size, r, theta, phi)
     assert _check_boundary((r, theta, phi), (r_min, 0.0, 0.0), (r_max, np.pi, np.pi * 2))
+
+    with pytest.raises(ValueError):
+        _ = GeneratorSpherical(64, method='bad_generator')
+
+    with pytest.raises(ValueError):
+        _ = GeneratorSpherical(64, r_min=-1.0)
+
+    with pytest.raises(ValueError):
+        _ = GeneratorSpherical(64, r_min=1.0, r_max=0.0)
+
+    str(generator)
+    repr(generator)
 
 
 def test_concat_generator():
@@ -166,6 +284,9 @@ def test_concat_generator():
     r, theta, phi = added_generator.get_examples()
     assert _check_shape_and_grad(added_generator, size1 + size2 + size3, r, theta, phi)
 
+    str(concat_generator)
+    repr(concat_generator)
+
 
 def test_static_generator():
     size = 100
@@ -185,6 +306,9 @@ def test_static_generator():
     assert _check_shape_and_grad(generator, size)
     assert _check_shape_and_grad(static_generator, size, r1, theta1, phi1, r2, theta2, phi2)
     assert (r1 == r2).all() and (theta1 == theta2).all() and (phi1 == phi2).all()
+
+    str(static_generator)
+    repr(static_generator)
 
 
 def test_predefined_generator():
@@ -218,6 +342,9 @@ def test_predefined_generator():
     assert _check_iterable_equal(z_array, z)
     assert _check_iterable_equal(w_tensor, w)
 
+    str(predefined_generator)
+    repr(predefined_generator)
+
 
 def test_transform_generator():
     size = 100
@@ -242,6 +369,16 @@ def test_transform_generator():
     assert _check_iterable_equal(x, x_expected)
     assert _check_iterable_equal(y, y_expected)
     assert _check_iterable_equal(z, z_expected)
+
+    transform_generator = TransformGenerator(generator, transform=lambda x, y, z: (torch.sin(x), y, -z))
+    x, y, z = transform_generator.get_examples()
+    assert _check_shape_and_grad(transform_generator, size, x, y, z)
+    assert _check_iterable_equal(x, x_expected)
+    assert _check_iterable_equal(y, y_expected)
+    assert _check_iterable_equal(z, z_expected)
+
+    str(transform_generator)
+    repr(transform_generator)
 
 
 def test_ensemble_generator():
@@ -274,6 +411,52 @@ def test_ensemble_generator():
     assert _check_shape_and_grad(product_generator, size, x, y)
     assert _check_iterable_equal(old_x, x)
     assert _check_iterable_equal(old_y, y)
+
+    str(ensemble_generator)
+    repr(ensemble_generator)
+
+
+def test_mesh_generator():
+    size = 10
+    x_min, x_max = 0.0, 1.0
+    y_min, y_max = 1.0, 2.0
+    z_min, z_max = 2.0, 3.0
+
+    generator1 = Generator1D(size)
+    mesh_generator = MeshGenerator(generator1)
+    x = mesh_generator.get_examples()
+    assert _check_shape_and_grad(mesh_generator, size, x)
+
+    mesh_generator = MeshGenerator(generator1, generator1, generator1)
+    m1, m2, m3 = mesh_generator.get_examples()
+    assert _check_shape_and_grad(mesh_generator, (size ** 3), m1, m2, m3)
+
+    generator1x = Generator1D(size, x_min, x_max, method="equally-spaced")
+    generator1y = Generator1D(size, y_min, y_max, method="equally-spaced")
+    generator1z = Generator1D(size, z_min, z_max, method="equally-spaced")
+    generator3 = Generator3D((size, size, size), (x_min, y_min, z_min), (x_max, y_max, z_max), method="equally-spaced")
+    mesh_generator = MeshGenerator(generator1x, generator1y, generator1z)
+    m1, m2, m3 = mesh_generator.get_examples()
+    g1, g2, g3 = generator3.get_examples()
+    assert _check_shape_and_grad(mesh_generator, (size ** 3), m1, m2, m3)
+    assert _check_iterable_equal(g1, m1)
+    assert _check_iterable_equal(g2, m2)
+    assert _check_iterable_equal(g3, m3)
+
+    generator1x = Generator1D(size, x_min, x_max, method="equally-spaced")
+    generator1y = Generator1D(size, y_min, y_max, method="equally-spaced")
+    generator1z = Generator1D(size, z_min, z_max, method="equally-spaced")
+    generator3 = Generator3D((size, size, size), (x_min, y_min, z_min), (x_max, y_max, z_max), method="equally-spaced")
+    xor_generator = generator1x ^ generator1y ^ generator1z
+    m1, m2, m3 = xor_generator.get_examples()
+    g1, g2, g3 = generator3.get_examples()
+    assert _check_shape_and_grad(xor_generator, (size ** 3), m1, m2, m3)
+    assert _check_iterable_equal(g1, m1)
+    assert _check_iterable_equal(g2, m2)
+    assert _check_iterable_equal(g3, m3)
+
+    str(mesh_generator)
+    repr(mesh_generator)
 
 
 def test_filter_generator():
@@ -314,6 +497,9 @@ def test_filter_generator():
     for _ in range(5):
         assert _check_shape_and_grad(filter_generator, fixed_size)
         filter_generator.get_examples()
+
+    str(filter_generator)
+    repr(filter_generator)
 
 
 def test_resample_generator():
@@ -360,6 +546,9 @@ def test_resample_generator():
     assert _check_iterable_equal(y + 100, z)
     assert len(torch.unique(x.detach())) < len(x)
 
+    str(resample_generator)
+    repr(resample_generator)
+
 
 def test_batch_generator():
     size = 10
@@ -393,3 +582,40 @@ def test_batch_generator():
         # update answer for next iteration
         answer_x = (answer_x + batch_size) % size
         answer_y = (answer_y + batch_size) % size
+
+    str(batch_generator)
+    repr(batch_generator)
+
+
+def test_sampler_geneartor():
+    size = 10
+    generator = Generator1D(size)
+    sampler_generator = SamplerGenerator(generator)
+    x = sampler_generator.get_examples()
+    assert isinstance(x, (list, tuple))
+    x, = x
+    assert x.shape == (size, 1)
+
+    str(sampler_generator)
+    repr(sampler_generator)
+
+
+def test_legacy_module():
+    with warns(FutureWarning):
+        import neurodiffeq.generator
+
+    from neurodiffeq.ode import ExampleGenerator
+    from neurodiffeq.pde import ExampleGenerator2D, PredefinedExampleGenerator2D
+    from neurodiffeq.pde_spherical import ExampleGenerator3D, ExampleGeneratorSpherical
+    with warns(FutureWarning):
+        ExampleGenerator(100)
+    with warns(FutureWarning):
+        ExampleGenerator2D()
+    with warns(FutureWarning):
+        x = torch.rand(10)
+        y = torch.rand(10)
+        PredefinedExampleGenerator2D(x, y)
+    with warns(FutureWarning):
+        ExampleGenerator3D()
+    with warns(FutureWarning):
+        ExampleGeneratorSpherical(100)
